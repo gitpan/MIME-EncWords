@@ -1,33 +1,57 @@
 use strict;
 use Test;
 
-BEGIN { plan tests => ($^V ge v5.8.1)? 20: 10 }
-
-my $_UNICODE = ($^V ge v5.8.1);
+BEGIN { plan tests => ($^V ge v5.8.1)? 42: 10 }
 
 use MIME::EncWords qw(decode_mimewords);
+$MIME::EncWords::Config = {
+    Detect7bit => 'YES',
+    Mapping => 'EXTENDED',
+    Replacement => 'DEFAULT',
+    Charset => 'ISO-8859-1',
+    Encoding => 'A',
+    Field => undef,
+    Folding => "\n",
+    MaxLineLen => 76,
+    Minimal => 'YES',
+};
+
+my @testins = MIME::Charset::USE_ENCODE?
+	      qw(decode-singlebyte decode-multibyte):
+	      qw(decode-singlebyte);
 
 {
-    local($/) = '';
-    open WORDS, "<testin/decode-singlebyte.txt" or die "open: $!";
+  local($/) = '';
+  foreach my $in (@testins) {
+    open WORDS, "<testin/$in.txt" or die "open: $!";
     while (<WORDS>) {
 	s{\A\s+|\s+\Z}{}g;    # trim
 
 	my ($isgood, $expect, $enc) = split /\n/, $_, 3;
+	my ($charset, $ucharset);
 	$isgood = (uc($isgood) eq 'GOOD');
-	$expect = eval $expect;
+	($expect, $charset, $ucharset) = eval $expect;
 
-	my $dec = decode_mimewords($enc);
+	my $dec = decode_mimewords($enc, Charset => $charset);
 	ok((($isgood && !$@) or (!$isgood && $@)) and
            ($isgood ? ($dec eq $expect) : 1));
-	if ($_UNICODE) {
-	    $dec = decode_mimewords($enc, Charset => "utf-8");
-	    Encode::from_to($expect, "iso-8859-1", "utf-8");
+	if (MIME::Charset::USE_ENCODE) {
+	    my $u;
+	    # Convert to other charset (or no conversion)...
+	    $u = $expect;
+	    Encode::from_to($u, $charset, "utf-8") if $charset;
+	    $dec = decode_mimewords($enc, Charset => $charset? "utf-8": "");
 	    ok((($isgood && !$@) or (!$isgood && $@)) and
-		($isgood ? ($dec eq $expect) : 1));
+		($isgood ? ($dec eq $u) : 1));
+	    # Convert to Unicode...
+	    $u = Encode::decode($charset || $ucharset || "us-ascii", $expect);
+	    $dec = decode_mimewords($enc, Charset => "_UNICODE_");
+	    ok((($isgood && !$@) or (!$isgood && $@)) and
+		($isgood ? ($dec eq $u) : 1));
 	}
     }
     close WORDS;
+  }
 }    
 
 1;
