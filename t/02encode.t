@@ -1,9 +1,8 @@
 use strict;
 use Test;
 
-BEGIN { plan tests => ($^V ge v5.8.1)? 17: 12 }
+BEGIN { plan tests => ($] >= 5.008001)? 17: 12 }
 
-use MIME::Charset qw(header_encode);
 use MIME::EncWords qw(encode_mimewords);
 $MIME::EncWords::Config = {
     Detect7bit => 'YES',

@@ -120,7 +120,7 @@ if (MIME::Charset::USE_ENCODE) {
 #------------------------------
 
 ### The package version, both in 1.23 style *and* usable by MakeMaker:
-$VERSION = '1.007';
+$VERSION = '1.008';
 
 ### Public Configuration Attributes
 our $Config = {
@@ -725,13 +725,14 @@ sub encode_mimewords  {
 		$csetobj = MIME::Charset->new($cset,
 					      Mapping => $Params{Mapping});
 	    }
-	} elsif ($cset ne "US-ASCII") {
+	} elsif (!$cset or $cset ne "US-ASCII") {
 	    $cset ||= $Params{Charset} || $Config->{Charset};
 	    $csetobj = MIME::Charset->new($cset, Mapping => $Params{Mapping});
 	    my $u = $s;
+	    $@ = '';
 	    eval {
 		$u = $csetobj->decode($u, 0);
-	    };
+	    } if MIME::Charset::USE_ENCODE;
 	    if ($@ or $u =~ $UNSAFE) {
 		$enc = $Params{Encoding};
 	    } else {
