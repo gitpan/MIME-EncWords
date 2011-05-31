@@ -130,7 +130,7 @@ if (MIME::Charset::USE_ENCODE) {
 #------------------------------
 
 ### The package version, both in 1.23 style *and* usable by MakeMaker:
-$VERSION = '1.012.1';
+$VERSION = '1.012.2';
 
 ### Public Configuration Attributes
 $Config = {
@@ -784,6 +784,10 @@ sub encode_mimewords  {
 				Detect7bit => $Params{Detect7bit},
 				Replacement => $Params{Replacement},
 				Encoding => $Params{Encoding});
+	# Resolve 'S' encoding based on global length. See (*).
+	$enc = 'S' if $Params{Encoding} =~ /[AS]/ and
+		      $enc and $obj->header_encoding eq 'S';
+
 	# pure ASCII
 	if ($cset eq "US-ASCII" and !$enc and $s =~ /$UNSAFEASCII/) {
 	    # pure ASCII with unsafe sequences should be encoded
@@ -792,7 +796,10 @@ sub encode_mimewords  {
 		$ascii->output_charset;
 	    $csetobj = MIME::Charset->new($cset,
 					  Mapping => $Params{Mapping});
-	    $enc = $csetobj->header_encoding || 'Q';
+	    # Preserve original Encoding option unless it was 'A'.
+	    $enc = ($Params{Encoding} eq 'A') ?
+		   ($csetobj->header_encoding || 'Q') :
+		   $Params{Encoding};
 	} else {
 	    $csetobj = MIME::Charset->new($cset,
 					  Mapping => $Params{Mapping});
@@ -833,6 +840,36 @@ sub encode_mimewords  {
 	    }
 	}
 	push @triplets, [$s, $enc, $csetobj];
+    }
+
+    # (*) Resolve 'S' encoding based on global length.
+    my @s_enc = grep { $_->[1] and $_->[1] eq 'S' } @triplets;
+    if (scalar @s_enc) {
+	my $enc;
+	my $b = scalar grep { $_->[1] and $_->[1] eq 'B' } @triplets;
+	my $q = scalar grep { $_->[1] and $_->[1] eq 'Q' } @triplets;
+	# 'A' chooses 'B' or 'Q' when all other encoded-words have same enc.
+	if ($Params{Encoding} eq 'A' and $b and ! $q) {
+	    $enc = 'B';
+	} elsif ($Params{Encoding} eq 'A' and ! $b and $q) {
+	    $enc = 'Q';
+	# Otherwise, assuming 'Q', when characters to be encoded are more than
+	# 6th of total, 'B' will win.
+	# Note: This might give 'Q' so great advantage...
+	} else {
+	    my @no_enc = grep { ! $_->[1] } @triplets;
+	    my $total = length join('', map { $_->[0] } (@no_enc, @s_enc));
+	    my $q = scalar(() = join('', map { $_->[0] } @s_enc) =~
+			   m{[^- !*+/0-9A-Za-z]}g);
+	    if ($total < $q * 6) {
+		$enc = 'B';
+	    } else {
+		$enc = 'Q';
+	    }
+	}
+        foreach (@triplets) {
+	    $_->[1] = $enc if $_->[1] and $_->[1] eq 'S';
+	}
     }
 
     # chop leading FWS
@@ -1108,7 +1145,7 @@ For more details read F<MIME/EncWords/Defaults.pm.sample>.
 
 =head1 VERSION
 
-Consult $VERSION variable.
+Consult C<$VERSION> variable.
 
 Development versions of this module may be found at
 L<http://hatuka.nezumi.nu/repos/MIME-EncWords/>.
