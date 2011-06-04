@@ -11,7 +11,7 @@ MIME::EncWords - deal with RFC 2047 encoded words (improved)
 
 I<L<MIME::EncWords> is aimed to be another implimentation
 of L<MIME::Words> so that it will achieve more exact conformance with
-RFC 2047 (former RFC 1522) specifications.  Additionally, it contains
+RFC 2047 (formerly RFC 1522) specifications.  Additionally, it contains
 some improvements.
 Following synopsis and descriptions are inherited from its inspirer,
 then added descriptions on improvements (B<**>) or changes and
@@ -130,7 +130,7 @@ if (MIME::Charset::USE_ENCODE) {
 #------------------------------
 
 ### The package version, both in 1.23 style *and* usable by MakeMaker:
-$VERSION = '1.012.2';
+$VERSION = '1.012.3';
 
 ### Public Configuration Attributes
 $Config = {
@@ -171,10 +171,14 @@ sub _decode_B {
 # _decode_Q STRING
 #     Private: used by _decode_header() to decode "Q" encoding, which is
 #     almost, but not exactly, quoted-printable.  :-P
+#     Improvement by this module: sanity check on encoded sequence (>=1.012.3).
 sub _decode_Q {
     my $str = shift;
-    $str =~ s/_/\x20/g;					# RFC-1522, Q rule 2
-    $str =~ s/=([\da-fA-F]{2})/pack("C", hex($1))/ge;	# RFC-1522, Q rule 1
+    if ($str =~ /=(?![0-9a-fA-F][0-9a-fA-F])/) { #XXX:" " and "\t" are allowed
+	return undef;
+    }
+    $str =~ s/_/\x20/g;					# RFC 2047, Q rule 2
+    $str =~ s/=([0-9a-fA-F]{2})/pack("C", hex($1))/ge;	# RFC 2047, Q rule 1
     $str;
 }
 
@@ -220,6 +224,10 @@ B<**>
 However, adjacent encoded-words with same charset will be concatenated
 to handle multibyte sequences safely.
 
+B<**>
+Language information defined by RFC2231, section 5 will be additonal
+third element, if any.
+
 B<*>
 Whitespaces surrounding unencoded data will not be stripped so that
 compatibility with L<MIME::Words> will be ensured.
@@ -239,7 +247,7 @@ get I<something> back when decoding headers).
 $@ will be false if no error was detected.
 
 B<*>
-Malformed base64 encoded-words will be kept encoded.
+Malformed encoded-words will be kept encoded.
 In this case $@ will be set.
 
 Any arguments past the ENCODED string are taken to define a hash of options.
@@ -345,6 +353,7 @@ sub decode_mimewords {
 		next;
 	    }
 
+	  { local $@;
 	    if (scalar(@tokens) and
 		lc($charset || "") eq lc($tokens[-1]->[1] || "") and
 		resolve_alias($charset) and
@@ -359,6 +368,7 @@ sub decode_mimewords {
 		push @tokens, [$dec];
 	    }
 	    $spc = $tspc;
+	  }
             next;
         }
 
@@ -393,6 +403,7 @@ sub decode_mimewords {
 
     # Detect 7-bit charset
     if ($Params{Detect7bit} ne "NO") {
+	local $@;
 	foreach my $t (@tokens) {
 	    unless ($t->[0] =~ $UNSAFE or $t->[1]) {
 		my $charset = MIME::Charset::_detect_7bit_charset($t->[0]);
@@ -403,9 +414,13 @@ sub decode_mimewords {
 	}
     }
 
-    return (wantarray ? @tokens : join('',map {
-	&_convert($_->[0], $_->[1], $cset, $Params{Mapping})
-	} @tokens));
+    if (wantarray) {
+	@tokens;
+    } else {
+	join('', map {
+	    &_convert($_->[0], $_->[1], $cset, $Params{Mapping})
+	} @tokens);
+    }
 }
 
 #------------------------------
@@ -603,7 +618,8 @@ If empty string C<""> is specified, encoded-words exceeding line length
 
 B<Note>:
 B<*>
-Though RFC 2822 states that the lines are delimited by CRLF (C<"\r\n">), 
+Though RFC 5322 (formerly RFC 2822) states that the lines in
+Internet messages are delimited by CRLF (C<"\r\n">), 
 this module chose LF (C<"\n">) as a default to keep backward compatibility.
 When you use the default, you might need converting newlines
 before encoded headers are thrown into session.
@@ -624,6 +640,7 @@ B<**>
 
 Maximum line length excluding newline.
 The default is 76.
+Negative value means unlimited line length (as of release 1.012.3).
 
 =item Minimal
 B<**>
@@ -636,7 +653,7 @@ encoded-words exceeding line length will be split based only on their
 lengths.
 Default is C<"YES"> by which minimal portions of text are encoded.
 If C<"DISPNAME"> is specified, portions including special characters
-described in RFC5322 (former RFC2822, RFC822) address specification
+described in RFC5322 (formerly RFC2822, RFC822) address specification
 (section 3.4) are also encoded.
 This is useful for encoding display-name of address fields.
 
@@ -785,8 +802,10 @@ sub encode_mimewords  {
 				Replacement => $Params{Replacement},
 				Encoding => $Params{Encoding});
 	# Resolve 'S' encoding based on global length. See (*).
-	$enc = 'S' if $Params{Encoding} =~ /[AS]/ and
-		      $enc and $obj->header_encoding eq 'S';
+	$enc = 'S'
+	    if defined $enc and
+	       ($Params{Encoding} eq 'S' or
+		$Params{Encoding} eq 'A' and $obj->header_encoding eq 'S');
 
 	# pure ASCII
 	if ($cset eq "US-ASCII" and !$enc and $s =~ /$UNSAFEASCII/) {
@@ -879,8 +898,12 @@ sub encode_mimewords  {
 
     # Split long ``words''.
     my @splitted;
-    my $restlen = $firstlinelen;
-    foreach (@triplets) {
+    my $restlen;
+    if ($Params{MaxLineLen} < 0) {
+      @splitted = @triplets;
+    } else {
+      $restlen = $firstlinelen;
+      foreach (@triplets) {
 	my ($s, $enc, $csetobj) = @$_;
 
 	push @splitted, &_split($s, $enc, $csetobj, $restlen, $maxrestlen);
@@ -893,6 +916,7 @@ sub encode_mimewords  {
 	}
 	$restlen -= $lastlen; # FIXME: Sometimes estimated longer
 	$restlen = $maxrestlen if $restlen <= 1;
+      }
     }
 
     # Do encoding.
@@ -913,6 +937,8 @@ sub encode_mimewords  {
 		   $s =~ /^[\r\n\t ]/)? '': ' ';
 	if (!scalar(@lines)) {
 	    push @lines, $s;
+	} elsif ($Params{MaxLineLen} < 0) {
+	    $lines[-1] .= $spc.$s;
 	} elsif (length($lines[-1].$spc.$s) <= $restlen) {
 	    $lines[-1] .= $spc.$s;
 	} else {
